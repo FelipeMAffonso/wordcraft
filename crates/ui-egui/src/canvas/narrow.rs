@@ -146,7 +146,7 @@ mod tests {
 
     /// Lines of the body whose right edge passes `right` (screen points), on the pages drawn last
     /// frame, each named by its page and its top.
-    fn cut_lines(app: &WordApp, right: f32) -> Vec<String> {
+    fn cut_lines(app: &mut WordApp, right: f32) -> Vec<String> {
         let l = app.session.layout();
         let s = app.canvas.scale;
         let mut cut = Vec::new();
@@ -188,20 +188,20 @@ mod tests {
     /// every line at the right.
     #[test]
     fn at_482_no_line_is_cut_at_the_right() {
-        let h = run_app(482.0, 820.0, true);
-        let s = h.state();
+        let mut h = run_app(482.0, 820.0, true);
+        let s = h.state_mut();
         assert_eq!(s.app.session.view.mode, ViewMode::Web);
         assert!(!s.app.canvas.page_rects.is_empty(), "the document is drawn");
-        let cut = cut_lines(&s.app, 482.0);
+        let cut = cut_lines(&mut s.app, 482.0);
         assert!(cut.is_empty(), "lines cut at the right: {cut:?}");
         // PLANTED: the same window in Print Layout at 100 percent, as 0.16.0 opened it.
-        let planted = run_app(482.0, 820.0, false);
+        let mut planted = run_app(482.0, 820.0, false);
         assert_eq!(planted.state().app.session.view.mode, ViewMode::Print);
-        assert!(!cut_lines(&planted.state().app, 482.0).is_empty(), "the check refuses Print Layout at 100 percent in 482");
+        assert!(!cut_lines(&mut planted.state_mut().app, 482.0).is_empty(), "the check refuses Print Layout at 100 percent in 482");
         // A wide window keeps Print Layout and its lines inside.
-        let wide = run_app(1200.0, 820.0, true);
+        let mut wide = run_app(1200.0, 820.0, true);
         assert_eq!(wide.state().app.session.view.mode, ViewMode::Print);
-        assert!(cut_lines(&wide.state().app, 1200.0).is_empty());
+        assert!(cut_lines(&mut wide.state_mut().app, 1200.0).is_empty());
     }
 
     #[test]

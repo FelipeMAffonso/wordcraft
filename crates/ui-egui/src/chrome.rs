@@ -626,7 +626,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     // of drawing the controls over the count and the language.
                     let item_w = |ui: &Ui, s: &str, icon: bool| {
                         let w = text_width(ui.painter(), s, &TypeRung::Caption.regular(), TypeRung::Caption.tracking(), t.text_dim);
-                        if icon { 17.0 } else { 0.0 } + w + 1.0
+                        (if icon { 17.0 } else { 0.0 }) + w + 1.0
                     };
                     let page_txt = crate::i18n::fmt(tl!("Page {page} of {pages}"), &[("page", &page.to_string()), ("pages", &l.pages.len().to_string())]);
                     // The live count: words (the default, as Word's status bar counts), characters
