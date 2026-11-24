@@ -107,7 +107,12 @@ impl AutoView {
             }
             ViewAsk::Auto => {
                 let page_w = app.session.doc.sections().first().map_or(612.0, |(_, s)| s.page_w);
-                let ruler = app.session.view.ruler;
+                let v = &app.session.view;
+                let ruler = v.ruler;
+                // The canvas's area leaves out the vertical ruler only in Print Layout: measure both
+                // views the same way, or a width near the edge would switch back and forth.
+                let ruler_drawn = ruler && v.mode == ViewMode::Print && !v.read_mode;
+                let work_w = work_w + if ruler_drawn { RULER } else { 0.0 };
                 if work_w.is_finite() && work_w > 0.0 && work_w < print_page_needs(page_w, ruler) {
                     self.set_web(app);
                 } else if app.session.view.mode == ViewMode::Web && !app.session.view.read_mode {
@@ -226,6 +231,17 @@ mod tests {
         assert_eq!(c.session.view.mode, ViewMode::Print);
         auto.apply(&mut c, 482.0);
         assert_eq!(c.session.view.mode, ViewMode::Web);
+        // Near the edge it settles: the same window, measured as each view's canvas measures it
+        // (Print Layout's leaves out the ruler), keeps one view.
+        let mut d = app();
+        let ruler = d.session.view.ruler;
+        let edge = print_page_needs(d.session.doc.sections()[0].1.page_w, ruler) - 10.0;
+        let mut auto = AutoView::new(ViewAsk::Auto);
+        for _ in 0..4 {
+            let canvas_w = if ruler && d.session.view.mode == ViewMode::Print { edge - RULER } else { edge };
+            auto.apply(&mut d, canvas_w);
+        }
+        assert_eq!(d.session.view.mode, ViewMode::Web, "a window 10 px short of the page stays in Web Layout");
     }
 
     #[test]

@@ -103,7 +103,10 @@ pub fn start() {
                         crate::host::Bridge::set_author(&mut app, &author);
                         prefs.keep_own_author(&app.session.author, &own);
                     }
-                    Ok(Box::new(WebShell { app, inbox, messages, prefs }))
+                    // A window narrower than the page opens in Web Layout (0.16.1), or the view the
+                    // address asks for (`?view=web`, `?zoom=pageWidth`).
+                    let view = wordcraft_ui_egui::canvas::narrow::AutoView::new(wordcraft_ui_egui::canvas::narrow::view_ask(&query()));
+                    Ok(Box::new(WebShell { app, inbox, messages, prefs, view }))
                 }),
             )
             .await;
@@ -138,6 +141,8 @@ struct WebShell {
     inbox: Inbox,
     messages: Rc<RefCell<Vec<String>>>,
     prefs: crate::prefs::PrefsSync,
+    /// The view for the window's width until the person picks one (0.16.1).
+    view: wordcraft_ui_egui::canvas::narrow::AutoView,
 }
 
 fn local_storage() -> Option<web_sys::Storage> {
@@ -199,6 +204,11 @@ impl eframe::App for WebShell {
                     }
                 });
             }
+        }
+        if self.view.choosing() {
+            // The canvas's work area once it is drawn, else the window's.
+            let work = self.app.canvas.canvas_rect.map_or(ui.ctx().content_rect().width(), |r| r.width());
+            self.view.apply(&mut self.app, work);
         }
         self.app.ui(ui);
     }

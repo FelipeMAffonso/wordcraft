@@ -621,12 +621,14 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                         resp
                     };
                     let st = |ui: &mut Ui, s: &str| st_icon(ui, None, s);
-                    if st(ui, &crate::i18n::fmt(tl!("Page {page} of {pages}"), &[("page", &page.to_string()), ("pages", &l.pages.len().to_string())]))
-                        .on_hover_text(tl!("Go To (⌘⌥G)"))
-                        .clicked()
-                    {
-                        let _ = app.run("ui.dialog", json!({"name": "goto"}));
-                    }
+                    // What each item says, measured before anything is drawn, so a narrow bar
+                    // (0.16.1: WordCraft in a 482 px column) can leave out what doesn't fit instead
+                    // of drawing the controls over the count and the language.
+                    let item_w = |ui: &Ui, s: &str, icon: bool| {
+                        let w = text_width(ui.painter(), s, &TypeRung::Caption.regular(), TypeRung::Caption.tracking(), t.text_dim);
+                        if icon { 17.0 } else { 0.0 } + w + 1.0
+                    };
+                    let page_txt = crate::i18n::fmt(tl!("Page {page} of {pages}"), &[("page", &page.to_string()), ("pages", &l.pages.len().to_string())]);
                     // The live count: words (the default, as Word's status bar counts), characters
                     // with spaces, or characters without spaces — whichever the person chose (#2797).
                     let unit = app.ui.status_count;
@@ -638,6 +640,58 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                         let selected = crate::count_in_unit(&app.session.selected_text(), unit);
                         status_count_text(unit, counts.in_unit(unit), Some(selected))
                     };
+                    let part_label = (app.session.sel.focus.story != StoryRef::Body && !crate::canvas::in_text_box(app)).then(|| {
+                        match crate::canvas::part_kind(app, app.session.sel.focus.story) {
+                            Some(PartKind::Footnote) => tl!("Editing footnote"),
+                            Some(PartKind::Endnote) => tl!("Editing endnote"),
+                            _ => tl!("Editing header/footer"),
+                        }
+                    });
+                    // The language at the caret; a click sets the proofing language (Review › Language).
+                    let lang = crate::ribbon::caret_language(app);
+                    let missing = crate::ribbon::caret_missing_dictionary(app);
+                    let unreadable = crate::ribbon::caret_unreadable_dictionary(app);
+                    let shown = if unreadable.is_some() {
+                        crate::i18n::fmt(tl!("{language} (dictionary unreadable)"), &[("language", &lang)])
+                    } else if missing.is_some() {
+                        crate::i18n::fmt(tl!("{language} (no dictionary)"), &[("language", &lang)])
+                    } else {
+                        lang.clone()
+                    };
+                    let tip = dictionary_problem(&lang, &unreadable, missing).unwrap_or_else(|| tl!("Language").to_string());
+                    // Fonts the document uses that aren't installed: they're drawn in other fonts, so
+                    // the text can wrap and paginate unlike where the document was made.
+                    let missing_fonts = app.cached_missing_fonts(&l).0;
+                    let font_count = missing_fonts.iter().filter(|f| !f.metric_compatible).count();
+                    let font_label = (font_count > 0).then(|| crate::i18n::tn(font_count as u64, "{n} font not installed", "{n} fonts not installed"));
+                    let tracking = app.session.doc.settings.track_changes;
+                    let overtype = app.session.prefs.overtype;
+                    let gap = ui.spacing().item_spacing.x;
+                    let core = item_w(ui, &page_txt, false) + gap + item_w(ui, &wtxt, false) + gap + item_w(ui, &shown, false);
+                    // The extras in the order they are kept (the last one goes first).
+                    let mut extras: Vec<f32> = Vec::new();
+                    if let Some(p) = part_label {
+                        extras.push(item_w(ui, p, false));
+                    }
+                    if tracking {
+                        extras.push(item_w(ui, tl!("Track Changes: On"), false));
+                    }
+                    if let Some(f) = &font_label {
+                        extras.push(item_w(ui, f, true));
+                    }
+                    if overtype {
+                        extras.push(item_w(ui, tl!("Overtype"), false));
+                    }
+                    let (keep, tier) = fit_status(ui.available_width(), core, &extras, &status_controls_widths(ui, app), gap);
+                    // Which extras are kept, in their order.
+                    let mut kept = (0..extras.len()).map(|i| i < keep);
+                    let keep_part = part_label.is_some() && kept.next().unwrap_or(false);
+                    let keep_tracking = tracking && kept.next().unwrap_or(false);
+                    let keep_fonts = font_label.is_some() && kept.next().unwrap_or(false);
+                    let keep_overtype = overtype && kept.next().unwrap_or(false);
+                    if st(ui, &page_txt).on_hover_text(tl!("Go To (⌘⌥G)")).clicked() {
+                        let _ = app.run("ui.dialog", json!({"name": "goto"}));
+                    }
                     let counted = st(ui, &wtxt);
                     // Right-click, as Word's status bar offers: choose what the count shows (#2797).
                     counted.context_menu(|ui| {
@@ -652,41 +706,21 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     if counted.clicked() {
                         let _ = app.run("ui.dialog", json!({"name": "wordCount"}));
                     }
-                    if app.session.sel.focus.story != StoryRef::Body && !crate::canvas::in_text_box(app) {
-                        let label = match crate::canvas::part_kind(app, app.session.sel.focus.story) {
-                            Some(PartKind::Footnote) => tl!("Editing footnote"),
-                            Some(PartKind::Endnote) => tl!("Editing endnote"),
-                            _ => tl!("Editing header/footer"),
-                        };
+                    if keep_part && let Some(label) = part_label {
                         st(ui, label);
                     }
-                    // The language at the caret; a click sets the proofing language (Review › Language).
-                    let lang = crate::ribbon::caret_language(app);
-                    let missing = crate::ribbon::caret_missing_dictionary(app);
-                    let unreadable = crate::ribbon::caret_unreadable_dictionary(app);
-                    let shown = if unreadable.is_some() {
-                        crate::i18n::fmt(tl!("{language} (dictionary unreadable)"), &[("language", &lang)])
-                    } else if missing.is_some() {
-                        crate::i18n::fmt(tl!("{language} (no dictionary)"), &[("language", &lang)])
-                    } else {
-                        lang.clone()
-                    };
-                    let tip = dictionary_problem(&lang, &unreadable, missing).unwrap_or_else(|| tl!("Language").to_string());
                     let resp = st(ui, &shown).on_hover_text(tip);
                     crate::rtl::menu(&resp).show(|ui| {
                         ui.set_min_width(200.0);
                         crate::rtl::root(ui, |ui| crate::ribbon::language_menu(ui, app));
                     });
-                    if app.session.doc.settings.track_changes {
+                    if keep_tracking {
                         st(ui, tl!("Track Changes: On"));
                     }
-                    // Fonts the document uses that aren't installed: they're drawn in other fonts, so
-                    // the text can wrap and paginate unlike where the document was made.
-                    let missing = app.cached_missing_fonts(&l).0;
-                    let count = missing.iter().filter(|f| !f.metric_compatible).count();
-                    if count > 0 {
-                        let label = crate::i18n::tn(count as u64, "{n} font not installed", "{n} fonts not installed");
-                        let resp = st_icon(ui, Some("fontMissing"), &label).on_hover_text(tl!("Shown in substitute fonts. Click for details."));
+                    let missing = missing_fonts;
+                    let count = font_count;
+                    if keep_fonts && let Some(label) = &font_label {
+                        let resp = st_icon(ui, Some("fontMissing"), label).on_hover_text(tl!("Shown in substitute fonts. Click for details."));
                         crate::rtl::menu(&resp).show(|ui| {
                             ui.set_min_width(260.0);
                             ui.label(egui::RichText::new(tl!("Not installed — shown as")).strong());
@@ -705,7 +739,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                             }
                         });
                     }
-                    if app.session.prefs.overtype && st(ui, tl!("Overtype")).on_hover_text(tl!("Click to switch back to inserting")).clicked() {
+                    if keep_overtype && st(ui, tl!("Overtype")).on_hover_text(tl!("Click to switch back to inserting")).clicked() {
                         let _ = app.run("text.overtype", json!({"value": false}));
                     }
                     // The message is drawn where the row is now; the controls on the right are laid
@@ -728,10 +762,20 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                         // A fixed width for three digits plus a small reserve, so the controls to the
                         // left don't shift as the percentage gains or loses digits (#1975).
                         let zslot = text_width(ui.painter(), "000%", &zfont, ztrack, t.text_dim) + 4.0;
+                        // The controls this bar has room for (fit_status), from the far end inwards; the
+                        // leftmost one drawn is where the message has to stop (#2402).
+                        if tier >= STATUS_TIERS - 1 {
+                            return;
+                        }
                         let (zr, zresp) = ui.allocate_exact_size(vec2(zw.max(zslot) + 1.0, TypeRung::Caption.line_height()), Sense::click());
+                        lead_edge(&mut controls_left, rtl, zr);
                         paint_text(ui.painter(), pos2(zr.max.x - 1.0, zr.min.y), Align2::RIGHT_TOP, &ztxt, &zfont, ztrack, t.text_dim);
+                        zresp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &ztxt));
                         if zresp.clicked() && !reading {
                             let _ = app.run("ui.dialog", json!({ "name": "zoom" }));
+                        }
+                        if tier > 2 {
+                            return;
                         }
                         // The slider grows to the right in every language, so the buttons stay at its
                         // ends: plus on the right. This cluster fills from the far end inwards.
@@ -745,7 +789,9 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                         };
                         let (inner, outer) = (("minus", "Zoom Out", false), ("plus", "Zoom In", true));
                         let (near, far) = if rtl { (inner, outer) } else { (outer, inner) };
-                        if small_icon(ui, near.0, tl!(near.1)) {
+                        let near_resp = small_icon(ui, near.0, tl!(near.1));
+                        lead_edge(&mut controls_left, rtl, near_resp.rect);
+                        if near_resp.clicked() {
                             zoom_step(app, near.2);
                         }
                         // Reading zoom changes only reading presentation, never the normal view zoom.
@@ -753,6 +799,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                         let slider = egui::Slider::new(&mut v, if reading { 0.75..=1.5 } else { 0.1..=5.0 }).logarithmic(!reading).show_value(false);
                         ui.spacing_mut().slider_width = 110.0;
                         let response = ui.add(slider);
+                        lead_edge(&mut controls_left, rtl, response.rect);
                         response.widget_info(|| {
                             egui::WidgetInfo::labeled(egui::Role::Slider, ui.is_enabled(), if reading { tl!("Text Size") } else { tl!("Zoom") })
                         });
@@ -760,8 +807,13 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                             let command = if reading { "view.readTextSize" } else { "view.zoom" };
                             let _ = app.run(command, json!({"value": (v * 100.0).round()}));
                         }
-                        if small_icon(ui, far.0, tl!(far.1)) {
+                        let far_resp = small_icon(ui, far.0, tl!(far.1));
+                        lead_edge(&mut controls_left, rtl, far_resp.rect);
+                        if far_resp.clicked() {
                             zoom_step(app, far.2);
+                        }
+                        if tier > 1 {
+                            return;
                         }
                         ui.add_space(10.0);
                         let mode = app.session.view.mode;
@@ -772,6 +824,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                             ("readMode", "view.readMode", tl!("Read Mode"), read),
                         ] {
                             let (r, resp) = ui.allocate_exact_size(vec2(22.0, 20.0), Sense::click());
+                            lead_edge(&mut controls_left, rtl, r);
                             if on {
                                 ui.painter().rect_filled(r, 3.0, t.checked);
                             } else if resp.hovered() {
@@ -783,13 +836,16 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                                 let _ = app.run(id, json!({}));
                             }
                         }
+                        if tier > 0 {
+                            return;
+                        }
                         ui.add_space(8.0);
                         let focus = tl!("Focus");
                         let focus_w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(focus.to_string(), regular(11.5), t.text_dim).size().x);
                         let (r, resp) = ui.allocate_exact_size(vec2((focus_w + 26.0).max(56.0), 20.0), Sense::click());
                         // The Focus button is the last of the controls, so it is the leftmost one: the
                         // message has to stop before it (#2402).
-                        controls_left = if rtl { r.max.x } else { r.min.x };
+                        lead_edge(&mut controls_left, rtl, r);
                         if resp.hovered() {
                             ui.painter().rect_filled(r, 3.0, t.hover);
                         }
@@ -816,6 +872,10 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     {
                         let font = TypeRung::Caption.regular();
                         let track = TypeRung::Caption.tracking();
+                        // With no control drawn (a very narrow bar) the message may run to the bar's end.
+                        if !controls_left.is_finite() {
+                            controls_left = if rtl { ui.max_rect().min.x } else { msg_edge } + if rtl { -1.0 } else { 1.0 } * ui.spacing().item_spacing.x;
+                        }
                         // The room the message has: what is left between here and the controls.
                         let room = if rtl {
                             msg_edge - controls_left - ui.spacing().item_spacing.x
@@ -839,14 +899,46 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
         });
 }
 
-fn small_icon(ui: &mut Ui, icon: &str, tip: &str) -> bool {
+fn small_icon(ui: &mut Ui, icon: &str, tip: &str) -> egui::Response {
     let t = Tokens::get(ui.ctx());
     let (r, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
     if resp.hovered() {
         ui.painter().rect_filled(r, 3.0, t.hover);
     }
     icons::paint(ui.painter(), r.shrink(3.0), icon, t.icon, t.accent);
-    resp.on_hover_text(tip).clicked()
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tip));
+    resp.on_hover_text(tip)
+}
+
+/// The sets of controls on the status bar's far side ([`fit_status`]): all of them, without
+/// Focus, without the view buttons, the zoom percentage alone, and none.
+const STATUS_TIERS: usize = 5;
+
+/// The width each set of the status bar's controls takes, widest first ([`STATUS_TIERS`]), with
+/// the spacing they are drawn with and a small reserve.
+fn status_controls_widths(ui: &Ui, app: &WordApp) -> [f32; STATUS_TIERS] {
+    let t = Tokens::get(ui.ctx());
+    let (font, track) = (TypeRung::Caption.regular(), TypeRung::Caption.tracking());
+    let reading = app.session.view.read_mode;
+    let z = (if reading { app.session.view.read_zoom } else { app.canvas.scale / crate::canvas::PX_PER_PT } * 100.0).round();
+    let zw = text_width(ui.painter(), &format!("{z}%"), &font, track, t.text_dim);
+    let zslot = text_width(ui.painter(), "000%", &font, track, t.text_dim) + 4.0;
+    let space = 4.0;
+    let reserve = 6.0;
+    let pct = zw.max(zslot) + 1.0 + reserve;
+    // minus, the slider (110), plus
+    let zoom = 18.0 + space + 110.0 + space + 18.0 + space;
+    // the space before them, then Web Layout, Print Layout and Read Mode
+    let views = 10.0 + 3.0 * (22.0 + space);
+    let focus_w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(tl!("Focus").to_string(), regular(11.5), t.text_dim).size().x);
+    let focus = 8.0 + space + (focus_w + 26.0).max(56.0);
+    [pct + zoom + views + focus, pct + zoom + views, pct + zoom, pct, 0.0]
+}
+
+/// The edge of the controls drawn so far that faces the message: the left edge of the leftmost
+/// one, or the right edge of the rightmost one right to left (#2402).
+fn lead_edge(edge: &mut f32, rtl: bool, r: Rect) {
+    *edge = if rtl { edge.max(r.max.x) } else { edge.min(r.min.x) };
 }
 
 /// [`WordApp::cached_missing_fonts`]: the list, and the warnings by font key.
@@ -940,6 +1032,31 @@ impl WordApp {
 
 /// The status bar's count line (#2797): the whole document's `total`, or "selected of total" when
 /// part of it is selected, worded as the Word Count dialog words the same counts.
+/// What a status bar `avail` points wide shows (0.16.1, WordCraft in a narrow column): how many
+/// of the left-hand extras it keeps (`extras`, the widths in the order they are kept: the part
+/// being edited, Track Changes, missing fonts, Overtype) and which set of controls on the right
+/// (`tiers`, widest first: all, without Focus, without the view buttons, the zoom percentage
+/// only, nothing). The page, the count and the language (`core`) always stay; the controls of
+/// least use go first, then the extras, then the zoom percentage. `gap` is the space between
+/// two items. PURE.
+pub(crate) fn fit_status(avail: f32, core: f32, extras: &[f32], tiers: &[f32], gap: f32) -> (usize, usize) {
+    let need = |kept: usize, tier: usize| {
+        let left = core + extras[..kept].iter().map(|w| w + gap).sum::<f32>();
+        left + if tiers[tier] > 0.0 { gap + tiers[tier] } else { 0.0 }
+    };
+    let last = tiers.len() - 1;
+    let pct = last.saturating_sub(1);
+    // All the extras with the widest controls that fit, down to the zoom percentage alone.
+    if let Some(tier) = (0..=pct).find(|&t| need(extras.len(), t) <= avail) {
+        return (extras.len(), tier);
+    }
+    // Then fewer extras beside the zoom percentage, then none of the controls.
+    if let Some(kept) = (0..extras.len()).rev().find(|&k| need(k, pct) <= avail) {
+        return (kept, pct);
+    }
+    (0, last)
+}
+
 pub(crate) fn status_count_text(unit: StatusCount, total: usize, selected: Option<usize>) -> String {
     match (unit, selected) {
         (StatusCount::Words, None) => crate::i18n::fmt(tl!("{words} words"), &[("words", &total.to_string())]),
