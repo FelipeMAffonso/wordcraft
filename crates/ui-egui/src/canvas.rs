@@ -23,6 +23,7 @@ mod geometry;
 mod input;
 mod links;
 mod margins;
+pub mod narrow;
 mod navigation;
 mod pages;
 mod reading;

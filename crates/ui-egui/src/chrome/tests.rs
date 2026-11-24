@@ -198,6 +198,80 @@ fn the_status_bar_count_is_chosen_from_its_context_menu() {
     assert_eq!(b.ui.status_count, StatusCount::Characters, "kept between runs");
 }
 
+/// Pairs of status bar items (by label, with their screen rects) that overlap, each named.
+fn overlapping(items: &[(String, egui::Rect)]) -> Vec<String> {
+    let mut out = Vec::new();
+    for (i, (a, ra)) in items.iter().enumerate() {
+        for (b, rb) in &items[i + 1..] {
+            let both = ra.shrink(0.5).intersect(rb.shrink(0.5));
+            if both.width() > 0.0 && both.height() > 0.0 {
+                out.push(format!("{a} {ra:?} over {b} {rb:?}"));
+            }
+        }
+    }
+    out
+}
+
+/// The status bar alone, `w` wide: its labelled items and the message, with their rects.
+fn status_items(a: &mut WordApp, w: f32) -> Vec<(String, egui::Rect)> {
+    let ctx = ctx();
+    ctx.enable_accesskit();
+    let input = egui::RawInput { time: Some(0.0), screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(w, 800.0))), ..Default::default() };
+    let mut out = ctx.run_ui(input, |ui| status_bar(a, ui));
+    out.textures_delta.clear();
+    let update = out.platform_output.accesskit_update.take().unwrap();
+    let mut items: Vec<(String, egui::Rect)> = update
+        .nodes
+        .iter()
+        .filter_map(|(_, node)| {
+            let (label, b) = (node.label()?, node.bounds()?);
+            (!label.is_empty() && b.y1 > b.y0).then(|| {
+                (label.to_string(), egui::Rect::from_min_max(egui::pos2(b.x0 as f32, b.y0 as f32), egui::pos2(b.x1 as f32, b.y1 as f32)))
+            })
+        })
+        .collect();
+    if let Some(msg) = ctx.read_response(status_message_id()) {
+        items.push(("the message".into(), msg.rect));
+    }
+    items
+}
+
+/// WordCraft 0.16.1: in Prepara's frame WordCraft is a 482 px column, where the word count was
+/// drawn over the language. No two status bar items overlap and each stays inside the window,
+/// with the page, the count and the language always shown; the controls of least use go first.
+#[test]
+fn a_narrow_status_bar_draws_no_item_over_another() {
+    for (w, extras) in [(482.0, false), (482.0, true), (360.0, true), (1200.0, true)] {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_engine::sample::sample_document()), crate::Services::default());
+        if extras {
+            a.session.doc.settings.track_changes = true;
+            a.session.prefs.overtype = true;
+            a.status_msg = Some(("Saved to the task".to_string(), crate::now_ms()));
+        }
+        let lang = crate::ribbon::caret_language(&a);
+        let items = status_items(&mut a, w);
+        let clash = overlapping(&items);
+        assert!(clash.is_empty(), "{w} px, extras {extras}: {clash:?}");
+        for (label, r) in &items {
+            assert!(r.min.x >= -0.5 && r.max.x <= w + 0.5, "{w} px: {label} {r:?} is outside the window");
+        }
+        let has = |f: &dyn Fn(&str) -> bool| items.iter().any(|(l, _)| f(l));
+        assert!(has(&|l| l.starts_with("Page ")), "{w} px: the page count is shown: {items:?}");
+        assert!(has(&|l| l.ends_with(" words")), "{w} px: the word count is shown: {items:?}");
+        assert!(has(&|l| l.starts_with(lang.as_str())), "{w} px: the language is shown: {items:?}");
+    }
+    // At 1200 every control is drawn, as before.
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_engine::sample::sample_document()), crate::Services::default());
+    let wide = status_items(&mut a, 1200.0);
+    for name in ["Focus", "Web Layout", "Print Layout", "Read Mode", "Zoom"] {
+        assert!(wide.iter().any(|(l, _)| l == name), "{name} at 1200: {wide:?}");
+    }
+    // PLANTED: two items drawn one over the other are refused.
+    let r = |x0: f32, x1: f32| egui::Rect::from_min_max(egui::pos2(x0, 0.0), egui::pos2(x1, 20.0));
+    assert_eq!(overlapping(&[("120 words".into(), r(90.0, 150.0)), ("English".into(), r(140.0, 200.0))]).len(), 1);
+    assert!(overlapping(&[("120 words".into(), r(90.0, 150.0)), ("English".into(), r(164.0, 200.0))]).is_empty());
+}
+
 /// #2402: a long message (the path of a file that isn't there) is shortened so that it stops
 /// before the controls on the right, instead of being drawn over the Focus button.
 #[test]
